@@ -7,7 +7,13 @@ date: "2026-03-28"
 ## Script Description
 This script creates daily data for the load, relative humidity, and temperature datasets. The 'data'_raw are the raw datasets, while the 'name'_proc are the processed daily data. 
 
-The processed datasets 
+
+## From Luana's Instructions: 
+For model training, use data from January 1, 2005, to June 30, 2010. Once you have processed the data, fit models using this training period. To evaluate model performance, use the fitted models to forecast daily demand for July 1, 2010, to July 31, 2010, as a validation set. Assess which model(s) provide accurate forecasts.
+
+After selecting the best-performing model(s), re-train the model using the full dataset from January 1, 2005, to June 30, 2011. Use this updated model to generate forecasts for July 1, 2011, to July 31, 2011. The final forecasts will be submitted as part of the competition.
+
+## 
 
 
 ```{r setup, include=FALSE}
@@ -107,16 +113,41 @@ nrow(humid_proc)
 ```
 
 
-
+Un-comment the following out to re-save the csv files
 ```{r}
-write_csv(temp_proc, "./Data/Daily_Data/Temperature_Daily.csv")
-write_csv(humid_proc, "./Data/Daily_Data/Humid_Daily.csv")
-write_csv(load_proc, "./Data/Daily_Data/Load_Daily.csv")
+#write_csv(temp_proc, "./Data/Daily_Data/Temperature_Daily.csv")
+#write_csv(humid_proc, "./Data/Daily_Data/Humid_Daily.csv")
+#write_csv(load_proc, "./Data/Daily_Data/Load_Daily.csv")
 
 
 ```
 
 
+Creating the model training data subset (Jan 2005 through July 2010)
+```{r}
+temp_train_rows <- nrow(temp_proc) - 61
+temp_training <- temp_proc[1: temp_train_rows, ]
+
+humid_train_rows <- nrow(humid_proc) - 61
+humid_training <- humid_proc[1: humid_train_rows, ]
+
+load_train_rows <- nrow(load_proc) - 61
+load_training <- load_proc[1: load_train_rows, ]
+
+
+```
+
+```{r}
+write_csv(temp_proc, "./Data/Model_Training/Temperature_Train.csv")
+write_csv(humid_proc, "./Data/Model_Training/Humid_Train.csv")
+write_csv(load_proc, "./Data/Model_Training/Load_Train.csv")
+
+```
+
+
+```{r}
+
+```
 
 
 
