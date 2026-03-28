@@ -1,0 +1,123 @@
+---
+title: "Cleaning_Data"
+output: html_document
+date: "2026-03-28"
+---
+
+## Script Description
+This script creates daily data for the load, relative humidity, and temperature datasets. The 'data'_raw are the raw datasets, while the 'name'_proc are the processed daily data. 
+
+The processed datasets 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, results = 'hide', message = FALSE}
+
+## loading libraries
+
+library(forecast)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(Kendall)
+library(tseries)
+library(tidyverse)
+library(readxl)
+library(dplyr)
+
+
+```
+
+```{r}
+#Inspecting Raw Data
+
+load_raw <- read_xlsx("./Data/Raw/load.xlsx")
+humid_raw <- read_xlsx("./Data/Raw/relative_humidity.xlsx")
+temp_raw <- read_xlsx("./Data/Raw/temperature.xlsx")
+
+head(load_raw)
+head(humid_raw)
+head(temp_raw)
+
+
+```
+Load data has hourly observations organized by columns, while the temperature and humidity data have hourly data in columns. For load data will merge across columns, but for the temp + humidity will group by date and average the group values by column. 
+
+
+```{r}
+## Cleaning Load Data
+
+load_proc <- load_raw %>% 
+  mutate(daily_ave = rowMeans(load_raw[ ,c(3:26)], na.rm = TRUE)) %>% 
+  select(date, daily_ave)
+
+
+head(load_proc)
+tail(load_proc)
+
+
+
+```
+Dataset is cleaned between Jan 2005 - June 2011
+For the project, we need to forecast january and feb of 2011. Will need a ts object with jan 2005-dec2010
+
+```{r}
+# Cleaning Humidity Data
+
+humid_proc <- humid_raw %>% 
+  group_by(date) %>% 
+  summarise(across(3:26, ~ mean(.x, na.rm = TRUE)))
+    
+
+tail(humid_proc)
+
+
+```
+
+
+```{r}
+
+# Cleaning Temperature Data
+
+temp_proc <- temp_raw %>% 
+  group_by(date) %>% 
+  summarise(across(3:26, ~ mean(.x, na.rm = TRUE)))
+
+#removing NA row at the end of the data
+temp_rows <- nrow(temp_proc) - 1
+temp_proc <- temp_proc[1:temp_rows, ]
+
+temp_proc
+tail(temp_proc)
+
+```
+
+
+```{r}
+#Checking all the rows are the same length
+#after checking head/ tail of individual datasets -- to check if start & end dates line up
+
+nrow(temp_proc)
+nrow(load_proc)
+nrow(humid_proc)
+
+```
+
+
+
+```{r}
+write_csv(temp_proc, "./Data/Daily_Data/Temperature_Daily.csv")
+write_csv(humid_proc, "./Data/Daily_Data/Humid_Daily.csv")
+write_csv(load_proc, "./Data/Daily_Data/Load_Daily.csv")
+
+
+```
+
+
+
+
+
+
