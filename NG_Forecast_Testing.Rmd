@@ -1,0 +1,107 @@
+---
+title: "NG_Forecast"
+output: html_document
+date: "2026-03-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(forecast)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(Kendall)
+library(tseries)
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(cowplot)
+
+```
+
+Initial Steps
+1. plots
+2. acf/ Pacf
+3. trend
+4. Seasonality
+5. Stationary tests
+6. Outliers
+7. Missing data
+
+
+
+```{r}
+#full data until July 31
+load_data <- read_csv("./Data/Model_Training/Load_Train.csv")
+
+
+#subset of data until June 30 (used for training the mode) - July 1-31 we will be forecasting
+train_rows <- nrow(load_data) - 31
+
+
+load_subset <- load_data[1:train_rows, ]
+
+#checking the data ends on the right date
+tail(load_data)
+tail(load_subset)
+head(load_subset)
+
+
+
+```
+
+
+
+# Creating Time Series Objects - Multiple Seasonality
+
+```{r}
+full_load_ts <- msts(load_data$daily_ave, 
+                     seasonal.periods = c(7, 365.25), 
+                      start=c(2005,01,01))
+
+train_load_ts <- msts(load_subset$daily_ave, 
+                      seasonal.periods = c(7,365.25), 
+                      start=c(2005,01,01))
+
+#creating a testing subset
+n_for = 30
+full_len = length(full_load_ts)
+
+test_load_ts <- subset(full_load_ts,
+                       start = train_len-n_for)
+
+```
+
+
+```{r}
+#Checking to make sure that the testing/ training subsets were lined up in the correct locations. Full ts was plotted underneath layers. 
+
+autoplot(full_load_ts, series = "full ts")+
+  autolayer(train_load_ts, series = "training ts")+
+  autolayer(test_load_ts, series = "test")
+
+```
+## calculating ACF and PACF
+
+```{r}
+load_acf <- autoplot(Acf(train_load_ts, lag.max = 40, plot = FALSE))
+load_pacf <- autoplot(Pacf(train_load_ts, lag.max = 40,  plot = FALSE))
+
+
+plot_grid(load_acf, load_pacf, nrow = 1)
+
+```
+
+# decomposing the series to assess the seasonal/ trend components
+
+```{r}
+
+train_load_ts %>% mstl() %>%
+  autoplot()
+
+```
+
+
