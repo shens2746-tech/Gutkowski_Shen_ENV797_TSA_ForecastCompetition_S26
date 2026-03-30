@@ -1,0 +1,158 @@
+---
+title: "NG_Forecast"
+output:
+  pdf_document: default
+  html_document: default
+date: "2026-03-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(forecast)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(Kendall)
+library(tseries)
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(cowplot)
+
+```
+
+Initial Steps
+1. plots
+2. acf/ Pacf
+3. trend
+4. Seasonality
+5. Stationary tests
+6. Outliers
+7. Missing data
+
+
+
+```{r}
+#full data until July 31
+load_data <- read_csv("./Data/Model_Training/Load_Train.csv")
+
+
+#subset of data until June 30 (used for training the mode) - July 1-31 we will be forecasting
+train_rows <- nrow(load_data) - 31
+
+
+load_subset <- load_data[1:train_rows, ]
+
+#checking the data ends on the right date
+tail(load_data)
+tail(load_subset)
+head(load_subset)
+
+```
+
+
+
+# Creating Time Series Objects - Multiple Seasonality
+
+```{r}
+full_load_ts <- msts(load_data$daily_ave, 
+                     seasonal.periods = c(7, 365.25), 
+                      start=c(2005,01,01))
+
+# creating a testing subset
+n_for <- 31
+full_len <- nrow(load_data)
+train_data <- load_data[1:(full_len - n_for), ]
+test_data  <- load_data[(full_len - n_for + 1):full_len, ]
+
+train_load_ts <- msts(train_data$daily_ave,
+                      seasonal.periods = c(7, 365.25),
+                      start = c(2005, 1, 1))
+
+test_load_ts <- msts(test_data$daily_ave,
+                    seasonal.periods = c(7, 365.25),
+                    start = end(train_load_ts) + c(0,1))
+```
+
+
+```{r}
+#Checking to make sure that the testing/ training subsets were lined up in the correct locations. Full ts was plotted underneath layers. 
+
+autoplot(full_load_ts, series = "full ts")+
+  autolayer(train_load_ts, series = "training ts")+
+  autolayer(test_load_ts, series = "test")
+
+```
+
+```{r}
+train_load_ts_arima <- ts(train_data$daily_ave, frequency = 7)
+full_load_ts_arima  <- ts(load_data$daily_ave, frequency = 7)
+
+fit_arima <- auto.arima(train_load_ts_arima)
+fc_arima <- forecast(fit_arima, h = 31)
+accuracy(fc_arima, test_data$daily_ave)
+```
+
+# Explaination:
+RMSE and MAE are substantially higher on the test set compared to the training set, showing that the predictive accuracy is dropped
+The MAPE on the test set is aorund 13.52%, showing that on average, the forecast deviates from the true values by about 13.52%.
+The MASE value exceeds 1 (≈1.67), indicating that the ARIMA model performs worse than a naive benchmark model on the test set.
+
+```{r}
+fit_final <- auto.arima(full_load_ts_arima)
+fc_final <- forecast(fit_final, h = 31)
+```
+ 
+```{r}
+template <- read_csv("~/TSA_SP26/group/Data/Model_Training/submission_template.csv")
+head(template)
+names(template)
+```
+```{r}
+submission <- template %>%
+  mutate(load = as.numeric(fc_final$mean))
+
+write_csv(submission, "~/TSA_SP26/group/Data/Model_Training/my_submission.csv")
+```
+
+## calculating ACF and PACF (here I'm not sure should we use train_load_ts or train_load_ts_arima, but the result seems like the same)
+
+```{r}
+load_acf <- autoplot(Acf(train_load_ts, lag.max = 40, plot = FALSE))
+load_pacf <- autoplot(Pacf(train_load_ts, lag.max = 40,  plot = FALSE))
+
+
+plot_grid(load_acf, load_pacf, nrow = 1)
+```
+
+```{r}
+load_acf <- autoplot(Acf(train_load_ts_arima, lag.max = 40, plot = FALSE))
+load_pacf <- autoplot(Pacf(train_load_ts_arima, lag.max = 40, plot = FALSE))
+
+plot_grid(load_acf, load_pacf, nrow = 1)
+```
+
+# decomposing the series to assess the seasonal/ trend components
+
+```{r}
+train_load_ts %>% mstl() %>%
+  autoplot()
+```
+```{r}
+## Stationarity test
+adf.test(train_load_ts_arima)
+```
+
+```{r}
+## Outlier visualization
+
+autoplot(train_load_ts_arima) +
+  ggtitle("Load Time Series")
+```
+
+
+
+
