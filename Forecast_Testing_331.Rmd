@@ -268,7 +268,7 @@ Out of the four multi-seasonality forecast models, the TBATS model had the best 
  
 
 ```{r}
-template <- read_csv("~/TSA_SP26/group/Data/Model_Training/my_submission.csv")
+template <- read_csv("submission_template.csv")
 head(template)
 names(template)
 ```
@@ -278,7 +278,7 @@ names(template)
 submission <- template %>%
   mutate(load = as.numeric(TBATS_for$mean))
 
-write_csv(submission, "~/TSA_SP26/group/Data/Model_Training/TBATS_submission.csv")
+write_csv(submission, "./Forecast_Submissions/TBATS_submission.csv")
 ```
 
 
