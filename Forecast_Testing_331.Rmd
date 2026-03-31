@@ -1,0 +1,284 @@
+---
+title: "NG_Forecast"
+output:
+  pdf_document: default
+  html_document: default
+date: "2026-03-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+library(forecast)
+library(Kendall)
+library(tseries)
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(cowplot)
+library(lubridate)
+library(ggplot2)
+library(smooth)
+library(zoo)
+library(kableExtra)
+
+```
+
+Initial Steps
+1. plots
+2. acf/ Pacf
+3. trend
+4. Seasonality
+5. Stationary tests
+6. Outliers
+7. Missing data
+
+
+
+```{r}
+#full data until July 31
+load_data <- read_csv("./Data/Model_Training/Load_Train.csv")
+
+
+#subset of data until June 30 (used for training the mode) - July 1-31 we will be forecasting
+train_rows <- nrow(load_data) - 31
+
+
+load_subset <- load_data[1:train_rows, ]
+
+#checking the data ends on the right date
+tail(load_data)
+tail(load_subset)
+head(load_subset)
+
+```
+
+
+
+# Creating Time Series Objects - Multiple Seasonality
+
+```{r}
+full_load_ts <- msts(load_data$daily_ave, 
+                     seasonal.periods = c(7, 365.25), 
+                      start=c(2005,01,01))
+
+# creating a testing subset
+n_for <- 31
+full_len <- nrow(load_data)
+train_data <- load_data[1:(full_len - n_for), ]
+test_data  <- load_data[(full_len - n_for + 1):full_len, ]
+
+train_load_ts <- msts(train_data$daily_ave,
+                      seasonal.periods = c(7, 365.25),
+                      start = c(2005, 1, 1))
+
+test_load_ts <- msts(test_data$daily_ave,
+                    seasonal.periods = c(7, 365.25),
+                    start = end(train_load_ts) + c(0,1))
+```
+
+
+
+
+
+```{r}
+#Checking to make sure that the testing/ training subsets were lined up in the correct locations. Full ts was plotted underneath layers. 
+
+autoplot(full_load_ts, series = "full ts")+
+  autolayer(train_load_ts, series = "training ts")+
+  autolayer(test_load_ts, series = "test")
+
+```
+
+
+
+## STL + ETS Model
+
+```{r}
+#Fit and forecast STL + ETS model to data
+ETS_fit <-  stlf(train_load_ts,h=31)
+
+#Plot foresting results
+autoplot(ETS_fit) + ylab("Load")
+
+#Plot model + observed data
+autoplot(train_load_ts) +
+  autolayer(ETS_fit, series="STL + ETS",PI=FALSE) +
+  ylab("Load")
+```
+ 
+## ARIMA + Fourier terms model
+
+```{r}
+
+ARIMA_Four_fit <- auto.arima(train_load_ts, 
+                             seasonal=FALSE, 
+                             lambda=0,
+                             xreg=fourier(train_load_ts, 
+                                          K=c(2,12))
+                             )
+
+#Forecast with ARIMA fit
+#also need to specify h for fourier terms
+ARIMA_Four_for <- forecast(ARIMA_Four_fit,
+                           xreg=fourier(train_load_ts,
+                                        K=c(2,12),
+                                        h=31),
+                           h=31
+                           ) 
+
+#Plot foresting results
+autoplot(ARIMA_Four_for) + ylab("Load")
+
+#Plot model + observed data
+autoplot(train_load_ts) +
+  autolayer(ARIMA_Four_for, series="ARIMA_FOURIER",PI=FALSE) +
+  ylab("Load")
+
+
+```
+
+ 
+## TBATS Model
+
+```{r}
+
+# TBATS can take time to fit
+TBATS_fit <- tbats(train_load_ts)
+
+TBATS_for <- forecast(TBATS_fit, h=31)
+
+#Plot foresting results
+autoplot(TBATS_for) +
+  ylab("Load") 
+
+#Plot model + observed data
+autoplot(train_load_ts) +
+  autolayer(TBATS_for, series="TBATS",PI=FALSE)+
+  ylab("Load") 
+
+
+```
+
+
+
+## Neural Network Fit
+```{r}
+#NN_fit <- nnetar(ts_act_power_daily_train,p=1,P=1)
+NN_fit <- nnetar(train_load_ts,
+                 p=1,
+                 P=0,
+                 xreg=fourier(train_load_ts, K=c(2,12)))
+
+#NN_for <- forecast(NN_fit, h=365) 
+NN_for <- forecast(NN_fit, 
+                   h=31,
+                   xreg=fourier(train_load_ts, 
+                                          K=c(2,12),h=31))
+
+
+#Plot foresting results
+autoplot(NN_for) +
+  ylab("Load") 
+
+
+#Plot model + observed data
+autoplot(train_load_ts) +
+  autolayer(NN_for, series="Neural Network",PI=FALSE)+
+  ylab("Load") 
+```
+
+
+
+
+
+## comparing forecasts
+```{r}
+#Model 1: STL + ETS
+ETS_scores <- accuracy(ETS_fit$mean,test_load_ts)  
+
+#Model 2: ARIMA + Fourier 
+ARIMA_scores <- accuracy(ARIMA_Four_for$mean,test_load_ts)
+
+# Model 3:  TBATS 
+TBATS_scores <- accuracy(TBATS_for$mean,test_load_ts)
+
+# Model 4:  Neural Network 
+NN_scores <- accuracy(NN_for$mean,test_load_ts)
+
+
+```
+
+
+#comparing performance metrics
+
+```{r}
+#create data frame
+scores <- as.data.frame(
+  rbind(ETS_scores, ARIMA_scores, TBATS_scores, NN_scores)
+  )
+row.names(scores) <- c("STL+ETS", "ARIMA+Fourier","TBATS","NN")
+
+#choose model with lowest RMSE
+best_model_index <- which.min(scores[,"RMSE"])
+cat("The best model by RMSE is:", row.names(scores[best_model_index,]))     
+```
+
+
+## creating a table of scores
+```{r}
+kbl(scores, 
+      caption = "Forecast Accuracy for Load",
+      digits = array(5,ncol(scores))) %>%
+  kable_styling(full_width = FALSE, position = "center", latex_options = "hold_position") %>%
+  #highlight model with lowest RMSE
+  kable_styling(latex_options="striped", stripe_index = which.min(scores[,"RMSE"]))
+```
+
+
+#plotting the different functions
+```{r}
+autoplot(train_load_ts) +
+  autolayer(ETS_fit, PI=FALSE, series="STL+ETS") +
+  autolayer(ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
+  autolayer(TBATS_for,PI=FALSE, series="TBATS") +
+  autolayer(NN_for,PI=FALSE, series="NN") +
+  xlab("Day") + ylab("Daily Active Power") +
+  guides(colour=guide_legend(title="Forecast"))
+```
+
+## taking a closer look at the forecasts
+```{r}
+autoplot(test_load_ts) +
+  autolayer(ETS_fit, PI=FALSE, series="STL+ETS") +
+  autolayer(ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
+  autolayer(TBATS_for,PI=FALSE, series="TBATS") +
+  autolayer(NN_for,PI=FALSE, series="NN")+
+  ylab("Daily Active Power") +
+  guides(colour=guide_legend(title="Forecast"))
+``` 
+Out of the four multi-seasonality forecast models, the TBATS model had the best performance across metrics except for MPE. For the first forecast submission, the TBATS model will be selected. 
+
+
+### Saving of forecasts
+
+ 
+
+```{r}
+template <- read_csv("~/TSA_SP26/group/Data/Model_Training/my_submission.csv")
+head(template)
+names(template)
+```
+
+
+```{r}
+submission <- template %>%
+  mutate(load = as.numeric(TBATS_for$mean))
+
+write_csv(submission, "~/TSA_SP26/group/Data/Model_Training/TBATS_submission.csv")
+```
+
+
