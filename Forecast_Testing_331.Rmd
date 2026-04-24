@@ -353,6 +353,34 @@ humid_sarimax <- accuracy(sarimax_hum_ts, test_load_ts)
 ```
 
 
+
+## Combining TBATS and NN
+
+```{r}
+#averaging of functions
+combo2_mean <- 0.6 * TBATS_for$mean + 0.4 * NN_for$mean
+
+combo2_mean <- ts(
+  combo2_mean,
+  start = start(test_load_ts),
+  frequency = frequency(test_load_ts)
+)
+```
+
+
+## Combining TBATS and NN
+
+```{r}
+#averaging of functions
+combo3_mean <- 0.5 * TBATS_for$mean + 0.5 * NN_for$mean
+
+combo3_mean <- ts(
+  combo2_mean,
+  start = start(test_load_ts),
+  frequency = frequency(test_load_ts)
+)
+```
+
 #comparing performance metrics
 
 ```{r}
@@ -380,29 +408,41 @@ kbl(scores,
 
 
 #plotting the different functions
+
 ```{r}
 autoplot(train_load_ts) +
+  autolayer(test_load_ts, series = "Actual") +
   autolayer(ETS_fit, PI=FALSE, series="STL+ETS") +
   autolayer(ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
-  autolayer(TBATS_for,PI=FALSE, series="TBATS") +
-  autolayer(NN_for,PI=FALSE, series="NN") +
-  autolayer(sarimax_ts, PI = FALSE, series = "SARIMAX")+
-  xlab("Day") + ylab("Daily Active Power") +
-  guides(colour=guide_legend(title="Forecast"))
+  autolayer(TBATS_for, PI=FALSE, series="TBATS") +
+  autolayer(NN_for, PI=FALSE, series="NN") +
+  autolayer(sarimax_ts, PI=FALSE, series="SARIMAX (Both)") +
+  autolayer(sarimax_temp_ts, PI=FALSE, series="Temp SARIMAX") +
+  autolayer(sarimax_hum_ts, PI=FALSE, series="Humid SARIMAX") +
+  autolayer(ensemble_ts, PI=FALSE, series="TBATS+NN") +
+  xlab("Day") + 
+  ylab("Daily Active Power") +
+  ggtitle("Model Comparison - Full Series") +
+  guides(colour = guide_legend(title = "Forecast"))
 ```
+
+
 
 ## taking a closer look at the forecasts
 ```{r}
 autoplot(test_load_ts) +
-  autolayer(ETS_fit, PI=FALSE, series="STL+ETS") +
-  autolayer(ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
-  autolayer(TBATS_for,PI=FALSE, series="TBATS") +
-  autolayer(NN_for,PI=FALSE, series="NN")+
-  autolayer(sarimax_ts, PI = FALSE, series = "SARIMAX")+
+  autolayer(ETS_fit$mean, PI=FALSE, series="STL+ETS") +
+  autolayer(ARIMA_Four_for$mean, PI=FALSE, series="ARIMA + Fourier") +
+  autolayer(TBATS_for$mean, PI=FALSE, series="TBATS") +
+  autolayer(NN_for$mean, PI=FALSE, series="NN") +
+  autolayer(sarimax_ts, PI=FALSE, series="SARIMAX (Temp and Humidity)") +
+  autolayer(sarimax_temp_ts, PI=FALSE, series="Temp SARIMAX") +
+  autolayer(sarimax_hum_ts, PI=FALSE, series="Humid SARIMAX") +
+  autolayer(ensemble_ts, PI=FALSE, series="TBATS+NN") +
   ylab("Daily Active Power") +
-  guides(colour=guide_legend(title="Forecast"))
+  ggtitle("Forecast Comparison - Test Period") +
+  guides(colour = guide_legend(title = "Forecast"))
 ``` 
-Out of the four multi-seasonality forecast models, the TBATS model had the best performance across metrics except for MPE. For the first forecast submission, the TBATS model will be selected. 
 
 
 ### Saving of forecasts
@@ -417,31 +457,65 @@ names(template)
 
 
 ```{r}
+#
 submission <- template %>%
   mutate(load = as.numeric(TBATS_for$mean))
 
 write_csv(submission, "./Forecast_Submissions/TBATS_submission.csv")
-
+#
 submission <- template %>%
   mutate(load = as.numeric(NN_for$mean))
 
 write_csv(submission, "./Forecast_Submissions/NN_submission.csv")
 
+#
 submission <- template %>%
   mutate(load = as.numeric(ARIMA_Four_for$mean))
 
 write_csv(submission, "./Forecast_Submissions/ARIMA_Four_for_submission.csv")
 
+#
 submission <- template %>%
   mutate(load = as.numeric(sarimax_ts))
 
 write_csv(submission, "./Forecast_Submissions/Sarimax_for_submission.csv")
 
+#
 submission <- template %>%
   mutate(load = as.numeric(ETS_fit$mean))
 
 write_csv(submission, "./Forecast_Submissions/ETS_for_submission.csv")
 
+#
+submission <- template %>%
+  mutate(load = as.numeric(sarimax_temp_ts))
+
+write_csv(submission, "./Forecast_Submissions/Sarimax_temp_submission.csv")
+
+#
+submission <- template %>%
+  mutate(load = as.numeric(sarimax_hum_ts))
+
+write_csv(submission, "./Forecast_Submissions/Sarimax_humidity_submission.csv")
+
+#
+submission <- template %>%
+  mutate(load = as.numeric(ensemble_ts))
+
+write_csv(submission, "./Forecast_Submissions/TBATS_NN_submission.csv")
+
+#
+submission <- template %>%
+  mutate(load = as.numeric(combo2_mean))
+
+write_csv(submission, "./Forecast_Submissions/TBATS_NN2_submission.csv")
+
+
+#
+submission <- template %>%
+  mutate(load = as.numeric(combo3_mean))
+
+write_csv(submission, "./Forecast_Submissions/TBATS_NN3_submission.csv")
 
 
 ```

@@ -221,6 +221,7 @@ autoplot(train_load_ts) +
 
 
 ## Incorporating Weather data
+Took the first principal component from the temperature and humidity data to attempt to capture the dominant patterns in the weather variables for use as exogenous predictors in the SARIMAX model.
 
 ```{r}
 temp_pc1 <- prcomp(temp_data %>% select(-date), scale. = TRUE)$x[,1]
@@ -263,6 +264,8 @@ sarimax_ts <- ts(
 
 
 # Just temperature SARIMAX
+Just used the first principal component of the temperature data as an exogenous predictor variable. 
+
 ```{r}
 sarimax_temp_fit <- auto.arima(
   train_data$daily_ave,
@@ -291,6 +294,8 @@ sarimax_temp_ts <- ts(
 
 
 #just humidity sarimax
+Just used the first principal component of the humidity data as an exogenous predictor variable. 
+
 ```{r}
 
 sarimax_hum_fit <- auto.arima(
@@ -332,9 +337,18 @@ ensemble_ts <- ts(
 )
 ```
 
+## Combining TBATS and NN
 
+```{r}
+#averaging of functions
+combo2_mean <- 0.6 * TBATS_for$mean + 0.4 * NN_for$mean
 
-
+combo2_mean <- ts(
+  combo2_mean,
+  start = start(test_load_ts),
+  frequency = frequency(test_load_ts)
+)
+```
 
 ## comparing forecasts
 ```{r}
@@ -362,6 +376,9 @@ temp_sarimax <- accuracy(sarimax_temp_ts, test_load_ts)
 #just humidity sarimax
 humid_sarimax <- accuracy(sarimax_hum_ts, test_load_ts)
 
+#averaging2 test
+tbats_nn_mix2_score <- accuracy(combo2_mean, test_load_ts)
+
 
 ```
 
@@ -371,9 +388,9 @@ humid_sarimax <- accuracy(sarimax_hum_ts, test_load_ts)
 ```{r}
 #create data frame
 scores <- as.data.frame(
-  rbind(ETS_scores, ARIMA_scores, TBATS_scores, NN_scores, sarimax_scores, tbats_nn_mix_score, temp_sarimax, humid_sarimax)
+  rbind(ETS_scores, ARIMA_scores, TBATS_scores, NN_scores, sarimax_scores, tbats_nn_mix_score, temp_sarimax, humid_sarimax, tbats_nn_mix2_score)
   )
-row.names(scores) <- c("STL+ETS", "ARIMA+Fourier","TBATS","NN", "Sarimax", "TBATS+NN", "Temp SARIMAX", "Humid SARIMAX")
+row.names(scores) <- c("STL+ETS", "ARIMA+Fourier","TBATS","NN", "Sarimax", "TBATS+NN(90/10)", "Temp SARIMAX", "Humid SARIMAX", "TBATS+NN(60/40)")
 
 #choose model with lowest RMSE
 best_model_index <- which.min(scores[,"RMSE"])
@@ -393,28 +410,41 @@ kbl(scores,
 
 
 #plotting the different functions
+
 ```{r}
 autoplot(train_load_ts) +
+  autolayer(test_load_ts, series = "Actual") +
   autolayer(ETS_fit, PI=FALSE, series="STL+ETS") +
   autolayer(ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
-  autolayer(TBATS_for,PI=FALSE, series="TBATS") +
-  autolayer(NN_for,PI=FALSE, series="NN") +
-  autolayer(sarimax_ts, PI = FALSE, series = "SARIMAX")+
-  xlab("Day") + ylab("Daily Active Power") +
-  guides(colour=guide_legend(title="Forecast"))
+  autolayer(TBATS_for, PI=FALSE, series="TBATS") +
+  autolayer(NN_for, PI=FALSE, series="NN") +
+  autolayer(sarimax_ts, PI=FALSE, series="SARIMAX (Both)") +
+  autolayer(sarimax_temp_ts, PI=FALSE, series="Temp SARIMAX") +
+  autolayer(sarimax_hum_ts, PI=FALSE, series="Humid SARIMAX") +
+  autolayer(ensemble_ts, PI=FALSE, series="TBATS+NN") +
+  xlab("Day") + 
+  ylab("Daily Active Power") +
+  ggtitle("Model Comparison - Full Series") +
+  guides(colour = guide_legend(title = "Forecast"))
 ```
+
+
 
 ## taking a closer look at the forecasts
 ```{r}
 autoplot(test_load_ts) +
-  autolayer(ETS_fit, PI=FALSE, series="STL+ETS") +
-  autolayer(ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
-  autolayer(TBATS_for,PI=FALSE, series="TBATS") +
-  autolayer(NN_for,PI=FALSE, series="NN")+
-  autolayer(sarimax_ts, PI = FALSE, series = "SARIMAX")+
+  autolayer(ETS_fit$mean, PI=FALSE, series="STL+ETS") +
+  autolayer(ARIMA_Four_for$mean, PI=FALSE, series="ARIMA + Fourier") +
+  autolayer(TBATS_for$mean, PI=FALSE, series="TBATS") +
+  autolayer(NN_for$mean, PI=FALSE, series="NN") +
+  autolayer(sarimax_ts, PI=FALSE, series="SARIMAX (Temp and Humidity)") +
+  autolayer(sarimax_temp_ts, PI=FALSE, series="Temp SARIMAX") +
+  autolayer(sarimax_hum_ts, PI=FALSE, series="Humid SARIMAX") +
+  autolayer(ensemble_ts, PI=FALSE, series="TBATS+NN") +
   ylab("Daily Active Power") +
-  guides(colour=guide_legend(title="Forecast"))
-```
+  ggtitle("Forecast Comparison - Test Period") +
+  guides(colour = guide_legend(title = "Forecast"))
+``` 
 
 
 
