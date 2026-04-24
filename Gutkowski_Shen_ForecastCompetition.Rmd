@@ -222,7 +222,6 @@ autoplot(train_load_ts) +
 
 ## Incorporating Weather data
 
-
 ```{r}
 temp_pc1 <- prcomp(temp_data %>% select(-date), scale. = TRUE)$x[,1]
 hum_pc1  <- prcomp(humid_data %>% select(-date), scale. = TRUE)$x[,1]
@@ -263,11 +262,77 @@ sarimax_ts <- ts(
 ```
 
 
+# Just temperature SARIMAX
+```{r}
+sarimax_temp_fit <- auto.arima(
+  train_data$daily_ave,
+  xreg = train_data$temp,
+  seasonal = TRUE,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+sarimax_temp_for <- forecast(
+  sarimax_temp_fit,
+  xreg = test_data$temp,
+  h = 31
+)
+
+sarimax_temp_ts <- ts(
+  sarimax_temp_for$mean,
+  start = end(train_load_ts) + c(0,1),
+  frequency = frequency(train_load_ts)
+)
 
 
-# Keep This Section separate / add in other models above!
-# keep adding new model fits to the score tables
-## will add a table that summarizes only the ones that we have submitted
+
+```
+
+
+
+#just humidity sarimax
+```{r}
+
+sarimax_hum_fit <- auto.arima(
+  train_data$daily_ave,
+  xreg = train_data$humidity,
+  seasonal = TRUE,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+sarimax_hum_for <- forecast(
+  sarimax_hum_fit,
+  xreg = test_data$humidity,
+  h = 31
+)
+
+sarimax_hum_ts <- ts(
+  sarimax_hum_for$mean,
+  start = end(train_load_ts) + c(0,1),
+  frequency = frequency(train_load_ts)
+)
+
+
+
+```
+
+
+
+## Combining TBATS and NN
+
+```{r}
+#averaging of functions
+ensemble_mean <- 0.9 * TBATS_for$mean + 0.1 * NN_for$mean
+
+ensemble_ts <- ts(
+  ensemble_mean,
+  start = start(test_load_ts),
+  frequency = frequency(test_load_ts)
+)
+```
+
+
 
 
 
@@ -288,6 +353,14 @@ NN_scores <- accuracy(NN_for$mean,test_load_ts)
 #SARIMAX 1
 sarimax_scores <- accuracy(sarimax_ts,test_load_ts)
 
+#averaging test
+tbats_nn_mix_score <- accuracy(ensemble_ts, test_load_ts)
+
+#Just temp sarimax
+temp_sarimax <- accuracy(sarimax_temp_ts, test_load_ts)
+
+#just humidity sarimax
+humid_sarimax <- accuracy(sarimax_hum_ts, test_load_ts)
 
 
 ```
@@ -298,9 +371,9 @@ sarimax_scores <- accuracy(sarimax_ts,test_load_ts)
 ```{r}
 #create data frame
 scores <- as.data.frame(
-  rbind(ETS_scores, ARIMA_scores, TBATS_scores, NN_scores, sarimax_scores)
+  rbind(ETS_scores, ARIMA_scores, TBATS_scores, NN_scores, sarimax_scores, tbats_nn_mix_score, temp_sarimax, humid_sarimax)
   )
-row.names(scores) <- c("STL+ETS", "ARIMA+Fourier","TBATS","NN", "Sarimax")
+row.names(scores) <- c("STL+ETS", "ARIMA+Fourier","TBATS","NN", "Sarimax", "TBATS+NN", "Temp SARIMAX", "Humid SARIMAX")
 
 #choose model with lowest RMSE
 best_model_index <- which.min(scores[,"RMSE"])
