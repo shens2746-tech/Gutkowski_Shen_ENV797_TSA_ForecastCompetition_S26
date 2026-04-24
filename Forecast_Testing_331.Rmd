@@ -56,6 +56,20 @@ head(load_subset)
 
 ```
 
+```{r}
+temp_data <- read_csv("./Data/Model_Training/Temperature_Train.csv")
+
+humid_data <- read_csv("./Data/Model_Training/Humid_Train.csv")
+
+head(temp_data)
+head(humid_data)
+
+head(load_data)
+
+
+```
+
+
 
 
 # Creating Time Series Objects - Multiple Seasonality
@@ -193,6 +207,50 @@ autoplot(train_load_ts) +
 
 
 
+## Incorporating Weather data
+
+```{r}
+temp_pc1 <- prcomp(temp_data %>% select(-date), scale. = TRUE)$x[,1]
+hum_pc1  <- prcomp(humid_data %>% select(-date), scale. = TRUE)$x[,1]
+
+weather_df <- data.frame(
+  date = temp_data$date,
+  temp = temp_pc1,
+  humidity = hum_pc1
+)
+
+train_data <- left_join(train_data, weather_df, by = "date")
+test_data  <- left_join(test_data, weather_df, by = "date")
+
+
+xreg_train <- as.matrix(train_data %>% select(temp, humidity))
+xreg_test  <- as.matrix(test_data %>% select(temp, humidity))
+
+sarimax_fit <- auto.arima(
+  train_data$daily_ave,
+  xreg = xreg_train,
+  seasonal = TRUE,
+  stepwise = FALSE,
+  approximation = FALSE
+)
+
+sarimax_for <- forecast(
+  sarimax_fit,
+  xreg = xreg_test,
+  h = 31
+)
+
+sarimax_ts <- ts(
+  sarimax_for$mean,
+  start = end(train_load_ts) + c(0, 1),
+  frequency = frequency(train_load_ts)
+)
+
+```
+
+
+
+
 
 
 ## comparing forecasts
@@ -209,6 +267,12 @@ TBATS_scores <- accuracy(TBATS_for$mean,test_load_ts)
 # Model 4:  Neural Network 
 NN_scores <- accuracy(NN_for$mean,test_load_ts)
 
+#SARIMAX 1
+sarimax_scores <- accuracy(sarimax_ts,test_load_ts)
+
+
+
+
 
 ```
 
@@ -218,9 +282,9 @@ NN_scores <- accuracy(NN_for$mean,test_load_ts)
 ```{r}
 #create data frame
 scores <- as.data.frame(
-  rbind(ETS_scores, ARIMA_scores, TBATS_scores, NN_scores)
+  rbind(ETS_scores, ARIMA_scores, TBATS_scores, NN_scores, sarimax_scores)
   )
-row.names(scores) <- c("STL+ETS", "ARIMA+Fourier","TBATS","NN")
+row.names(scores) <- c("STL+ETS", "ARIMA+Fourier","TBATS","NN", "Sarimax")
 
 #choose model with lowest RMSE
 best_model_index <- which.min(scores[,"RMSE"])
@@ -246,6 +310,7 @@ autoplot(train_load_ts) +
   autolayer(ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
   autolayer(TBATS_for,PI=FALSE, series="TBATS") +
   autolayer(NN_for,PI=FALSE, series="NN") +
+  autolayer(sarimax_ts, PI = FALSE, series = "SARIMAX")+
   xlab("Day") + ylab("Daily Active Power") +
   guides(colour=guide_legend(title="Forecast"))
 ```
@@ -257,6 +322,7 @@ autoplot(test_load_ts) +
   autolayer(ARIMA_Four_for, PI=FALSE, series="ARIMA + Fourier") +
   autolayer(TBATS_for,PI=FALSE, series="TBATS") +
   autolayer(NN_for,PI=FALSE, series="NN")+
+  autolayer(sarimax_ts, PI = FALSE, series = "SARIMAX")+
   ylab("Daily Active Power") +
   guides(colour=guide_legend(title="Forecast"))
 ``` 
@@ -279,6 +345,29 @@ submission <- template %>%
   mutate(load = as.numeric(TBATS_for$mean))
 
 write_csv(submission, "./Forecast_Submissions/TBATS_submission.csv")
+
+submission <- template %>%
+  mutate(load = as.numeric(NN_for$mean))
+
+write_csv(submission, "./Forecast_Submissions/NN_submission.csv")
+
+submission <- template %>%
+  mutate(load = as.numeric(ARIMA_Four_for$mean))
+
+write_csv(submission, "./Forecast_Submissions/ARIMA_Four_for_submission.csv")
+
+submission <- template %>%
+  mutate(load = as.numeric(sarimax_ts))
+
+write_csv(submission, "./Forecast_Submissions/Sarimax_for_submission.csv")
+
+submission <- template %>%
+  mutate(load = as.numeric(ETS_fit$mean))
+
+write_csv(submission, "./Forecast_Submissions/ETS_for_submission.csv")
+
+
+
 ```
 
 
