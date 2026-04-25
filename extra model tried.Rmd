@@ -1,0 +1,377 @@
+---
+  title: "ENV 797 Forecasting Competition - Machine Learning Models (additional model)"
+subtitle: "Team 4"
+author: "Gutkowski Shen"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+  toc: true
+toc_depth: 2
+number_sections: true
+pdf_document:
+  toc: true
+toc_depth: 2
+number_sections: true
+---
+
+
+```{r, results = 'hide', message = FALSE}
+
+## loading libraries
+
+library(forecast)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(Kendall)
+library(tseries)
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(glmnet)  
+library(randomForest) 
+library(gbm)         
+library(nnet)
+
+```
+
+
+
+## Cleaning Data
+
+```{r}
+# Inspecting Raw Data
+load_raw <- read_xlsx("./Data/Raw/load.xlsx")
+humid_raw <- read_xlsx("./Data/Raw/relative_humidity.xlsx")
+temp_raw <- read_xlsx("./Data/Raw/temperature.xlsx")
+```
+
+```{r}
+## Cleaning Load Data
+load_proc <- load_raw %>% 
+  mutate(daily_ave = rowMeans(load_raw[ ,c(3:26)], na.rm = TRUE)) %>% 
+  select(date, daily_ave)
+
+head(load_proc)
+tail(load_proc)
+```
+
+```{r}
+temp_proc <- temp_raw %>% 
+  group_by(date) %>% 
+  summarise(across(3:26, ~ mean(.x, na.rm = TRUE)))
+
+temp_rows <- nrow(temp_proc) - 1
+temp_proc <- temp_proc[1:temp_rows, ]
+
+temp_daily <- temp_proc %>% 
+  mutate(daily_temp = rowMeans(across(-date), na.rm = TRUE)) %>% 
+  select(date, daily_temp)
+```
+
+```{r}
+
+humid_proc <- humid_raw %>% 
+  group_by(date) %>% 
+  summarise(across(3:26, ~ mean(.x, na.rm = TRUE)))
+
+humid_rows <- min(nrow(humid_proc), nrow(temp_daily))
+humid_proc <- humid_proc[1:humid_rows, ]
+
+humid_daily <- humid_proc %>% 
+  mutate(daily_humid = rowMeans(across(-date), na.rm = TRUE)) %>% 
+  select(date, daily_humid)
+```
+
+## Building Feature Matrix
+
+```{r}
+# Combine into one panel
+load_data <- load_proc
+
+panel <- load_data %>%
+  left_join(temp_daily, by = "date") %>%
+  left_join(humid_daily, by = "date") %>%
+  arrange(date)
+
+panel$daily_temp <- zoo::na.locf(panel$daily_temp, na.rm = FALSE)
+panel$daily_humid <- zoo::na.locf(panel$daily_humid, na.rm = FALSE)
+panel$daily_temp <- zoo::na.locf(panel$daily_temp, na.rm = FALSE, fromLast = TRUE)
+panel$daily_humid <- zoo::na.locf(panel$daily_humid, na.rm = FALSE, fromLast = TRUE)
+
+n_total <- nrow(panel)
+n_for <- 31
+
+cat("Panel rows:", n_total, "\n")
+cat("Date range:", as.character(min(panel$date)), "to", 
+    as.character(max(panel$date)), "\n")
+```
+
+```{r}
+make_fourier_features <- function(t_idx, K_w = 3, K_y = 8) {
+  feats <- data.frame(t = t_idx)
+  for (k in 1:K_w) {
+    feats[[paste0("sinW", k)]] <- sin(2 * pi * k * t_idx / 7)
+    feats[[paste0("cosW", k)]] <- cos(2 * pi * k * t_idx / 7)
+  }
+  for (k in 1:K_y) {
+    feats[[paste0("sinY", k)]] <- sin(2 * pi * k * t_idx / 365.25)
+    feats[[paste0("cosY", k)]] <- cos(2 * pi * k * t_idx / 365.25)
+  }
+  feats
+}
+
+fourier_train <- make_fourier_features(1:n_total)
+
+# Combine: Fourier + weather + non-linear weather transforms
+features_full <- cbind(
+  fourier_train,
+  daily_temp = panel$daily_temp,
+  daily_humid = panel$daily_humid,
+  cdd = pmax(panel$daily_temp - 65, 0),    # cooling degree days
+  hdd = pmax(65 - panel$daily_temp, 0),    # heating degree days
+  temp2 = panel$daily_temp^2,
+  temp_humid = panel$daily_temp * panel$daily_humid
+)
+
+cat("Number of features:", ncol(features_full), "\n")
+head(features_full, 3)
+```
+
+# Candidate Models
+
+## Model 1 — Ridge Regression
+
+```{r}
+set.seed(797)
+ridge_fit <- glmnet(X_train, y_train_log, alpha = 0, lambda = 0.1)
+ridge_pred_log <- predict(ridge_fit, newx = X_test)
+Ridge_pred <- as.numeric(exp(ridge_pred_log))
+
+Ridge_scores <- accuracy(Ridge_pred, y_test)
+
+# Plot
+data.frame(date = panel$date[test_idx], 
+           obs = y_test, 
+           pred = Ridge_pred) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = obs), color = "black") +
+  geom_line(aes(y = pred), color = "blue") +
+  ylab("Daily Load") + ggtitle("Ridge — Validation Forecast")
+```
+
+## Model 2 — Random Forest
+
+```{r}
+set.seed(797)
+rf_fit <- randomForest(x = X_train, y = y_train_log, 
+                       ntree = 500, mtry = 8, nodesize = 5)
+rf_pred_log <- predict(rf_fit, X_test)
+RF_pred <- as.numeric(exp(rf_pred_log))
+
+RF_scores <- accuracy(RF_pred, y_test)
+
+data.frame(date = panel$date[test_idx], 
+           obs = y_test, 
+           pred = RF_pred) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = obs), color = "black") +
+  geom_line(aes(y = pred), color = "darkgreen") +
+  ylab("Daily Load") + ggtitle("Random Forest — Validation Forecast")
+```
+
+## Model 3 — Gradient Boosting Machine (GBM)
+
+```{r}
+set.seed(797)
+gbm_data <- data.frame(y = y_train_log, X_train)
+gbm_fit <- gbm(y ~ ., data = gbm_data, 
+               distribution = "gaussian",
+               n.trees = 500, interaction.depth = 4, 
+               shrinkage = 0.05, bag.fraction = 0.8,
+               verbose = FALSE)
+
+gbm_pred_log <- predict(gbm_fit, newdata = data.frame(X_test), 
+                        n.trees = 500)
+GBM_pred <- as.numeric(exp(gbm_pred_log))
+
+GBM_scores <- accuracy(GBM_pred, y_test)
+
+data.frame(date = panel$date[test_idx], 
+           obs = y_test, 
+           pred = GBM_pred) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = obs), color = "black") +
+  geom_line(aes(y = pred), color = "red") +
+  ylab("Daily Load") + ggtitle("GBM — Validation Forecast")
+```
+
+## Model 4 — Neural Network (MLP)
+
+```{r}
+# Standardize features for NN
+mu <- colMeans(X_train)
+sd <- apply(X_train, 2, sd)
+sd[sd == 0] <- 1  # avoid divide-by-zero
+X_train_sc <- scale(X_train, center = mu, scale = sd)
+X_test_sc  <- scale(X_test, center = mu, scale = sd)
+
+set.seed(797)
+nn_fit <- nnet(x = X_train_sc, y = y_train_log,
+               size = 10, linout = TRUE, 
+               decay = 0.1, maxit = 500, trace = FALSE)
+nn_pred_log <- predict(nn_fit, X_test_sc)
+MLP_pred <- as.numeric(exp(nn_pred_log))
+
+MLP_scores <- accuracy(MLP_pred, y_test)
+
+data.frame(date = panel$date[test_idx], 
+           obs = y_test, 
+           pred = MLP_pred) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = obs), color = "black") +
+  geom_line(aes(y = pred), color = "purple") +
+  ylab("Daily Load") + ggtitle("MLP Neural Network — Validation Forecast")
+```
+
+## Model 5 — ML Ensemble (Equal-Weight Average)
+
+```{r}
+ML_Ensemble_pred <- (Ridge_pred + RF_pred + GBM_pred + MLP_pred) / 4
+ML_Ensemble_scores <- accuracy(ML_Ensemble_pred, y_test)
+
+data.frame(date = panel$date[test_idx], 
+           obs = y_test, 
+           pred = ML_Ensemble_pred) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = obs), color = "black") +
+  geom_line(aes(y = pred), color = "orange") +
+  ylab("Daily Load") + ggtitle("ML Ensemble — Validation Forecast")
+```
+
+## Comparing Forecasts
+
+```{r}
+
+scores <- as.data.frame(rbind(
+  Ridge_scores, RF_scores, GBM_scores, MLP_scores, ML_Ensemble_scores
+))
+row.names(scores) <- c("Ridge", "RandomForest", "GBM", "MLP", "ML_Ensemble")
+
+best_model_index <- which.min(scores[, "RMSE"])
+cat("The best ML model by RMSE is:", row.names(scores)[best_model_index])
+```
+
+
+## All ML Models on Validation Period
+
+```{r}
+plot_df <- data.frame(
+  date = rep(panel$date[test_idx], 6),
+  load = c(y_test, Ridge_pred, RF_pred, GBM_pred, MLP_pred, ML_Ensemble_pred),
+  Model = rep(c("Observed", "Ridge", "RandomForest", "GBM", "MLP", "ML_Ensemble"),
+              each = length(test_idx))
+)
+
+ggplot(plot_df, aes(x = date, y = load, color = Model)) +
+  geom_line() + geom_point(size = 1.5) +
+  ylab("Daily Load") + ggtitle("All ML Models — July 2010 Validation") +
+  theme_minimal()
+```
+
+## Retrain on Full Data and Forecast July 2011
+
+```{r}
+fourier_future <- make_fourier_features((n_total + 1):(n_total + n_for))
+
+july_clim <- panel %>%
+  filter(month(date) == 7) %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  group_by(md) %>%
+  summarise(temp_mean = mean(daily_temp, na.rm = TRUE),
+            humid_mean = mean(daily_humid, na.rm = TRUE)) %>%
+  arrange(md)
+
+stopifnot(nrow(july_clim) == 31)
+
+future_features <- cbind(
+  fourier_future,
+  daily_temp = july_clim$temp_mean,
+  daily_humid = july_clim$humid_mean,
+  cdd = pmax(july_clim$temp_mean - 65, 0),
+  hdd = pmax(65 - july_clim$temp_mean, 0),
+  temp2 = july_clim$temp_mean^2,
+  temp_humid = july_clim$temp_mean * july_clim$humid_mean
+)
+
+X_future <- as.matrix(future_features)
+```
+
+```{r}
+# Retrain all 5 models on full data
+X_full <- as.matrix(features_full)
+y_full_log <- log(panel$daily_ave)
+
+# Ridge final
+set.seed(797)
+final_ridge_fit <- glmnet(X_full, y_full_log, alpha = 0, lambda = 0.1)
+final_Ridge <- as.numeric(exp(predict(final_ridge_fit, newx = X_future)))
+
+# Random Forest final
+set.seed(797)
+final_rf_fit <- randomForest(x = X_full, y = y_full_log, 
+                             ntree = 500, mtry = 8, nodesize = 5)
+final_RF <- as.numeric(exp(predict(final_rf_fit, X_future)))
+
+# GBM final
+set.seed(797)
+gbm_full_data <- data.frame(y = y_full_log, X_full)
+final_gbm_fit <- gbm(y ~ ., data = gbm_full_data, 
+                     distribution = "gaussian",
+                     n.trees = 500, interaction.depth = 4, 
+                     shrinkage = 0.05, bag.fraction = 0.8,
+                     verbose = FALSE)
+final_GBM <- as.numeric(exp(predict(final_gbm_fit, 
+                                    newdata = data.frame(X_future), 
+                                    n.trees = 500)))
+
+# MLP final
+mu_full <- colMeans(X_full)
+sd_full <- apply(X_full, 2, sd); sd_full[sd_full == 0] <- 1
+X_full_sc   <- scale(X_full, center = mu_full, scale = sd_full)
+X_future_sc <- scale(X_future, center = mu_full, scale = sd_full)
+
+set.seed(797)
+final_nn_fit <- nnet(x = X_full_sc, y = y_full_log,
+                     size = 10, linout = TRUE, decay = 0.1, 
+                     maxit = 500, trace = FALSE)
+final_MLP <- as.numeric(exp(predict(final_nn_fit, X_future_sc)))
+
+# ML Ensemble final
+final_ML_Ensemble <- (final_Ridge + final_RF + final_GBM + final_MLP) / 4
+
+cat("Final forecast means for July 2011:\n")
+cat("  Ridge:        ", round(mean(final_Ridge), 1), "\n")
+cat("  RandomForest: ", round(mean(final_RF), 1), "\n")
+cat("  GBM:          ", round(mean(final_GBM), 1), "\n")
+cat("  MLP:          ", round(mean(final_MLP), 1), "\n")
+cat("  ML_Ensemble:  ", round(mean(final_ML_Ensemble), 1), "\n")
+```
+
+
+```{r}
+dir.create("./Forecast_Submissions", showWarnings = FALSE)
+template <- read_csv("submission_template.csv")
+
+write_csv(template %>% mutate(load = final_Ridge),
+          "./Forecast_Submissions/Ridge_submission.csv")
+write_csv(template %>% mutate(load = final_RF),
+          "./Forecast_Submissions/RandomForest_submission.csv")
+write_csv(template %>% mutate(load = final_GBM),
+          "./Forecast_Submissions/GBM_submission.csv")
+write_csv(template %>% mutate(load = final_MLP),
+          "./Forecast_Submissions/MLP_submission.csv")
+write_csv(template %>% mutate(load = final_ML_Ensemble),
+          "./Forecast_Submissions/ML_Ensemble_submission.csv")
+```
+
