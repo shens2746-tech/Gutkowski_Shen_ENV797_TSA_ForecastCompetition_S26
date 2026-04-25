@@ -1,0 +1,290 @@
+---
+title: "Attempting_to_fix"
+output: html_document
+date: "2026-04-25"
+---
+
+Framework: 
+- model + forecast
+- ^repeat for all models tested / only have the code chunks showing for the models that were top 5
+- comparison of all the error metrics for each model
+
+## Cleaning Data
+
+```{r}
+
+## loading libraries
+
+library(forecast)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(Kendall)
+library(tseries)
+library(tidyverse)
+library(readxl)
+library(dplyr)
+
+```
+
+```{r}
+#Inspecting Raw Data
+load_raw <- read_xlsx("./Data/Raw/load.xlsx")
+humid_raw <- read_xlsx("./Data/Raw/relative_humidity.xlsx")
+temp_raw <- read_xlsx("./Data/Raw/temperature.xlsx")
+
+head(load_raw)
+head(humid_raw)
+head(temp_raw)
+```
+
+Load data has hourly observations organized by columns, while the temperature and humidity data have hourly data in columns. For load data will merge across columns, but for the temp + humidity will group by date and average the group values by column. 
+
+
+```{r}
+## Cleaning Load Data
+
+load_proc <- load_raw %>% 
+  mutate(daily_ave = rowMeans(load_raw[ ,c(3:26)], na.rm = TRUE)) %>% 
+  select(date, daily_ave)
+
+
+head(load_proc)
+tail(load_proc)
+
+
+```
+
+Dataset is cleaned between Jan 2005 - June 2011. For the project, we need to forecast January and Februaru 2011. To do this, we will need to create a time series object for January 2005 until December 2010.
+
+```{r}
+# Cleaning Humidity Data
+
+humid_proc <- humid_raw %>% 
+  group_by(date) %>% 
+  summarise(across(3:26, ~ mean(.x, na.rm = TRUE)))
+    
+
+tail(humid_proc)
+
+```
+
+
+```{r}
+
+# Cleaning Temperature Data
+
+temp_proc <- temp_raw %>% 
+  group_by(date) %>% 
+  summarise(across(3:26, ~ mean(.x, na.rm = TRUE)))
+
+#removing NA row at the end of the data
+temp_rows <- nrow(temp_proc) - 1
+temp_proc <- temp_proc[1:temp_rows, ]
+
+temp_proc
+tail(temp_proc)
+
+```
+
+
+## Fitting Models
+
+
+
+# Creating Time Series Objects - Multiple Seasonality
+
+```{r}
+load_data <- load_proc
+
+full_load_ts <- msts(load_data$daily_ave, 
+                     seasonal.periods = c(7, 365.25), 
+                      start=c(2005,01,01))
+
+# creating a testing subset
+n_for <- 31
+full_len <- nrow(load_data)
+train_data <- load_data[1:(full_len - n_for), ]
+test_data  <- load_data[(full_len - n_for + 1):full_len, ]
+
+train_load_ts <- msts(train_data$daily_ave,
+                      seasonal.periods = c(7, 365.25),
+                      start = c(2005, 1, 1))
+
+test_load_ts <- msts(test_data$daily_ave,
+                    seasonal.periods = c(7, 365.25),
+                    start = end(train_load_ts) + c(0,1))
+```
+
+
+## testing models
+
+## ARIMA + Fourier + Temperature Model
+```{r}
+# daily mean temperature
+temp_daily <- temp_proc %>% 
+  mutate(daily_temp = rowMeans(across(-date), na.rm = TRUE)) %>% 
+  select(date, daily_temp)
+
+# Align temperature with load training
+train_temp <- temp_daily$daily_temp[1:(full_len - n_for)]
+test_temp  <- temp_daily$daily_temp[(full_len - n_for + 1):full_len]
+
+# Training Fourier terms
+fourier_train <- fourier(train_load_ts, K = c(2,12))
+
+# Test Fourier terms (IMPORTANT: use h, not train object)
+fourier_test <- fourier(train_load_ts, K = c(2,12), h = n_for)
+
+
+
+
+# Fourier terms + temperature
+train_xreg <- cbind(fourier_train, temp = train_temp)
+test_xreg  <- cbind(fourier_test,  temp = test_temp)
+
+
+ARIMA_Temp_fit <- auto.arima(
+  train_load_ts,
+  seasonal = FALSE,
+  lambda = 0,
+  xreg = train_xreg,
+  stepwise = TRUE,
+  approximation = TRUE
+)
+
+ARIMA_Temp_for <- forecast(ARIMA_Temp_fit,
+                           xreg = test_xreg,
+                           h = 31)
+
+accuracy(ARIMA_Temp_for, test_load_ts)
+
+#Plot forecasting results
+autoplot(ARIMA_Temp_for) + ylab("Load")
+
+#Plot model + observed data
+autoplot(train_load_ts) +
+  autolayer(ARIMA_Temp_for, series = "ARIMA + Fourier + Temp", PI = FALSE) +
+  ylab("Load")
+```
+
+```{r}
+template <- read_csv("submission_template.csv")
+head(template)
+names(template)
+```
+
+
+```{r}
+#
+submission <- template %>%
+  mutate(load = as.numeric(ARIMA_Temp_for$mean))
+
+write_csv(submission, "./Forecast_Submissions/ARIMA_Four_temp_c212_submission.csv")
+```
+
+## Neural Network + Fourier + Temperature
+
+```{r}
+set.seed(797)
+NN_T_fit <- nnetar(train_load_ts, p = 1, P = 0, xreg = train_xreg)
+
+NN_T_for <- forecast(NN_T_fit, h = n_for, xreg = test_xreg)
+NN_T_scores <- accuracy(NN_T_for$mean, test_load_ts)
+
+autoplot(test_load_ts, series = "Observed") +
+  autolayer(NN_T_for, series = "NN+Four+Temp", PI = FALSE) +
+  ylab("Load")
+
+submission <- template %>%
+  mutate(load = as.numeric(NN_T_for$mean))
+
+write_csv(submission, "./Forecast_Submissions/NN_Four_temp_submission.csv")
+
+```
+
+
+# Keep This Section separate / add in other models above!
+# keep adding new model fits to the score tables
+## will add a table that summarizes only the ones that we have submitted
+
+
+## comparing forecasts
+```{r}
+
+# Model 5: ARIMA + Fourier + Temperature
+ARIMA_Temp_scores <- accuracy(ARIMA_Temp_for$mean, test_load_ts)
+
+# Model 6: Neural Network + Fourier + Temperature
+NN_T_scores <- accuracy(NN_T_for$mean, test_load_ts)
+
+```
+
+
+#comparing performance metrics
+
+```{r}
+#create data frame
+
+scores <- as.data.frame(
+  rbind(ARIMA_Temp_scores, NN_T_scores)
+)
+row.names(scores) <- c("ARIMA+Fourier+Temp", "NN+Fourier+Temp")
+
+#choose model with lowest RMSE
+best_model_index <- which.min(scores[,"RMSE"])
+cat("The best model by RMSE is:", row.names(scores[best_model_index,]))     
+```
+
+## creating a table of scores
+```{r}
+kbl(scores, 
+      caption = "Forecast Accuracy for Load",
+      digits = array(5,ncol(scores))) %>%
+  kable_styling(full_width = FALSE, position = "center", latex_options = "hold_position") %>%
+  #highlight model with lowest RMSE
+  kable_styling(latex_options="striped", stripe_index = which.min(scores[,"RMSE"]))
+```
+
+
+## Retrain on Full Data
+
+```{r}
+
+final_load_ts <- full_load_ts
+full_temp <- temp_daily$daily_temp[1:length(final_load_ts)]
+
+h_fin <- 31
+
+july_climatology <- temp_daily %>%
+  filter(month(date) == 7) %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  group_by(md) %>%
+  summarise(temp_mean = mean(daily_temp, na.rm = TRUE)) %>%
+  arrange(md) %>%
+  pull(temp_mean)
+
+final_xreg_tr  <- cbind(fourier(final_load_ts, K = c(2, 12)), temp = full_temp)
+final_xreg_fut <- cbind(fourier(final_load_ts, K = c(2, 12), h = h_fin),
+                        temp = july_climatology)
+```
+
+## Final ARIMA + Fourier + Temp
+
+```{r}
+final_ARIMA_T_fit <- auto.arima(final_load_ts, seasonal = FALSE, lambda = 0,
+                                xreg = final_xreg_tr)
+final_ARIMA_T <- forecast(final_ARIMA_T_fit, xreg = final_xreg_fut, h = h_fin)
+autoplot(final_ARIMA_T) + ylab("Daily Load")
+```
+
+## Final NN + Fourier + Temp
+
+```{r}
+final_NN_T_fit <- nnetar(final_load_ts, p = 1, P = 0, xreg = final_xreg_tr)
+final_NN_T <- forecast(final_NN_T_fit, h = h_fin, xreg = final_xreg_fut)
+autoplot(final_NN_T) + ylab("Daily Load")
+```
+
+
+

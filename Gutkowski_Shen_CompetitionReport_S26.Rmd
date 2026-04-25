@@ -1,6 +1,6 @@
 
 ---
-title: "Gutkowski Shen Forecast Submission"
+title: "Gutkowski Shen Forecast Competition Submission"
 output: 
   html_document: default
   pdf_document: default
@@ -9,7 +9,7 @@ date: "`r Sys.Date()`"
 
 # 1. Introduction
 
-The objective of this project is to forecast daily electrical load using historical load data and meteorological variables. Multiple time series models were evaluated, including seasonal decomposition methods, ARIMA-based models, neural networks, and models incorporating exogenous weather variables. Model performance was assessed using RMSE and Kaggle competition scores.
+The objective of this project is to forecast daily electrical load using historical load data and meteorological variables. Multiple time series models were evaluated, including seasonal decomposition methods, ARIMA-based models, neural networks, and models incorporating exogenous weather variables. Model performance was assessed using RMSE and Kaggle competition scores. Top performing models included solo and combinations of TBATS and Neural Network models. 
 
 
 # 2. Data Import and Wrangling
@@ -44,14 +44,23 @@ temp_proc <- temp_raw %>%
   group_by(date) %>% 
   summarise(across(3:26, ~ mean(.x, na.rm = TRUE)))
 
+# daily mean temperature
+temp_daily <- temp_proc %>% 
+  mutate(daily_temp = rowMeans(across(-date), na.rm = TRUE)) %>% 
+  select(date, daily_temp)
+
+n_for <- 31
+full_len <- nrow(load_proc)
+
+# Align temperature with load training
+train_temp <- temp_daily$daily_temp[1:(full_len - n_for)]
+test_temp  <- temp_daily$daily_temp[(full_len - n_for + 1):full_len]
+
 # Create time series
 full_load_ts <- msts(load_proc$daily_ave, 
                      seasonal.periods = c(7, 365.25), 
                      start=c(2005,1,1))
 
-# Train/test split
-n_for <- 31
-full_len <- nrow(load_proc)
 
 train_data <- load_proc[1:(full_len - n_for), ]
 test_data  <- load_proc[(full_len - n_for + 1):full_len, ]
@@ -63,24 +72,31 @@ train_load_ts <- msts(train_data$daily_ave,
 test_load_ts <- msts(test_data$daily_ave,
                      seasonal.periods = c(7, 365.25),
                      start = end(train_load_ts) + c(0,1))
+
+
+# Training Fourier terms
+fourier_train <- fourier(train_load_ts, K = c(2,12))
+
+# Test Fourier terms
+fourier_test <- fourier(train_load_ts, K = c(2,12), h = n_for)
+
+
+
+# Fourier terms + temperature
+train_xreg <- cbind(fourier_train, temp = train_temp)
+test_xreg  <- cbind(fourier_test,  temp = test_temp)
 ```
 
 # 3. Models
 
-## 3.1 TBATS Model
-```{r}
+
+## 1st in Kaggle: TBATS + Neural Network Combination (90/10 Weighting) - Score: 0.1019
+
+```{r, include = FALSE}
 
 TBATS_fit <- tbats(train_load_ts)
 TBATS_for <- forecast(TBATS_fit, h=31)
 
-autoplot(TBATS_for) + ylab("Load")
-
-```
-
-## 3.2  TBATS + NN Combination (50/50 weighting)
-```{r}
-#averaging of functions
-#NN_fit <- nnetar(ts_act_power_daily_train,p=1,P=1)
 NN_fit <- nnetar(train_load_ts,
                  p=1,
                  P=0,
@@ -93,108 +109,118 @@ NN_for <- forecast(NN_fit,
                                           K=c(2,12),h=31))
 
 
-
-combo3_mean <- 0.5 * TBATS_for$mean + 0.5 * NN_for$mean
-
-combo3_mean <- ts(
-  combo3_mean,
-  start = start(test_load_ts),
-  frequency = frequency(test_load_ts)
-)
-
 ```
 
-## 3.3 TBATS + Neural Network Combination
+After observing decent performance in TBATS and Neural Network models, weighted averages of these models were tested. The 90-10 TBATS-NN model was our top performing Kaggle model. 
 
 ```{r}
-combo_mean <- 0.9 * TBATS_for$mean + 0.1 * NN_for$mean
+TBATS_NN_9010 <- 0.9 * TBATS_for$mean + 0.1 * NN_for$mean
 
-combo_ts <- ts(
-  combo_mean,
+TBATS_NN_9010_ts <- ts(
+  TBATS_NN_9010,
   start = start(test_load_ts),
   frequency = frequency(test_load_ts)
 )
+```
+
+
+
+## 2nd in Kaggle: Solo TBATS Model - Score: 0.1023
+
+The TBATS model was our second top performing model in Kaggle. All parameters were left as defaults for this model. 
+
+```{r}
+
+TBATS_fit <- tbats(train_load_ts)
+TBATS_for <- forecast(TBATS_fit, h=31)
 
 
 ```
 
-## 3.4 TBATS + NN Combination (60/40 weighting)
+
+
+## 3rd in Kaggle: TBATS + NN Combination (60/40 weighting) - Score: 0.1043
+
+The 60-40 weighted TBATS-NN model was our third ranked Kaggle model. 
 
 ```{r}
 #averaging of functions (60/40 split)
-combo2_mean <- 0.6 * TBATS_for$mean + 0.4 * NN_for$mean
+TBATS_NN_6040 <- 0.6 * TBATS_for$mean + 0.4 * NN_for$mean
 
-combo2_mean <- ts(
-  combo2_mean,
+TBATS_NN_6040_ts <- ts(
+  TBATS_NN_6040,
   start = start(test_load_ts),
   frequency = frequency(test_load_ts)
 )
 ```
 
+## 4th in Kaggle: TBATS + NN Combination (50/50 weighting) - Score: 0.1043
 
-## SARIMAX (Humidity Only)
+The 50-50 weighted TBATS-NN model was our fourth ranked Kaggle model.
 
 ```{r}
-# Merge humidity
-train_data <- left_join(train_data, humid_proc, by = "date")
-test_data  <- left_join(test_data, humid_proc, by = "date")
 
-xreg_train <- as.matrix(train_data %>% select(-date, -daily_ave))
-xreg_test  <- as.matrix(test_data %>% select(-date, -daily_ave))
+TBATS_NN_5050 <- 0.5 * TBATS_for$mean + 0.5 * NN_for$mean
 
-sarimax_hum_fit <- auto.arima(
-  train_data$daily_ave,
-  xreg = xreg_train,
-  seasonal = TRUE
+TBATS_NN_5050_ts <- ts(
+  TBATS_NN_5050,
+  start = start(test_load_ts),
+  frequency = frequency(test_load_ts)
 )
 
-sarimax_hum_for <- forecast(
-  sarimax_hum_fit,
-  xreg = xreg_test,
-  h = 31
-)
-
-sarimax_hum_ts <- ts(
-  sarimax_hum_for$mean,
-  start = end(train_load_ts) + c(0,1),
-  frequency = frequency(train_load_ts)
-)
 ```
+
+## 5th in Kaggle: Neural Network + Fourier + Temperature  - Score: 0.1214
+
+The neural network model with Fourier terms and temperature as external regressors was included to attempt to account for both seasonal patterns and weather related influences on load.
+
+```{r}
+
+NN_T_fit <- nnetar(train_load_ts, p = 1, P = 0, xreg = train_xreg)
+
+NN_T_for <- forecast(NN_T_fit, h = n_for, xreg = test_xreg)
+
+
+```
+
+
 
 # 4. Model Comparison
 ```{r}
-combo2 <- accuracy(combo2_mean, test_load_ts)
+TBATS_NN_9010_score <- accuracy(TBATS_NN_9010_ts, test_load_ts)
 TBATS_scores <- accuracy(TBATS_for$mean, test_load_ts)
-combo3 <- accuracy(combo3_mean, test_load_ts)
-combo <- accuracy(combo_ts, test_load_ts)
-sarimax_scores <- accuracy(sarimax_hum_ts, test_load_ts)
+TBATS_NN_6040_score <- accuracy(TBATS_NN_6040_ts, test_load_ts)
+TBATS_NN_5050_score <- accuracy(TBATS_NN_5050_ts, test_load_ts)
+NN_T_scores <- accuracy(NN_T_for$mean, test_load_ts)
 
 scores <- as.data.frame(
-  rbind(combo2, TBATS_scores, combo3, combo, sarimax_scores)
+  rbind(TBATS_NN_9010_score, TBATS_scores, TBATS_NN_6040_score, TBATS_NN_5050_score, NN_T_scores)
 )
 
-row.names(scores) <- c("TBATS+NN (60/40)","TBATS","TBATS+NN (50/50)","TBATS+NN (90/10)","SARIMAX Humidity")
+row.names(scores) <- c("TBATS+NN (90/10)","TBATS","TBATS+NN (60/40)","TBATS+NN (50/50)","NN+Four+Temp")
 
 kbl(scores, caption = "Forecast Accuracy for Load") %>%
   kable_styling(full_width = FALSE)
 ```
 
+By RMSE, the neural network model with Fourier terms and temperature as external regressors was the top performing model. However, in Kaggle, this model ranked fifth. While the 90/10 weighted TBATS-NN model ranked second to last in our forecast accuracy tests, it was the top performing model in Kaggle. This suggests that lower RMSE on the test set did not necessarily translate to better performance on the Kaggle evaluation.
+
 # 5. Forecast Comparison Plot
 ```{r}
 autoplot(test_load_ts) +
+  autolayer(TBATS_NN_9010_ts, series="TBATS+NN (90/10)") +
   autolayer(TBATS_for$mean, series="TBATS") +
-  autolayer(combo2_mean, series="TBATS+NN (60/40)") +
-  autolayer(combo_ts, series="TBATS+NN (90/10)") +
-  autolayer(sarimax_hum_ts, series="SARIMAX Humidity") +
-  autolayer(combo3_mean, series = "TBATS+NN (50/50)")
+  autolayer(TBATS_NN_6040_ts, series="TBATS+NN (60/40)")+
+  autolayer(TBATS_NN_5050_ts, series="TBATS+NN (50/50)") +
+  autolayer(NN_T_for$mean, series = "NN+Four+Temp")+
   ylab("Daily Load") +
   ggtitle("Forecast Comparison (Test Period)")
 ```
 
 # 6. Results and Discussion
-The results indicate that seasonal structure is the dominant driver of electrical load. In the Kaggle competition the 50/50 averaged weighting for the TBATS model outperformed all other models, showing that combinations of models would improve forecasting. 
+The results indicate that seasonal structure is the dominant driver of electrical load. In the Kaggle competition, the 90/10 weighted TBATS–Neural Network model outperformed all other models, showing that combining models can improve forecasting performance.
 
-While the humidity based SARIMAX model was a top performer, incorporating weather variables through SARIMAX did not improve performance significantly compared with the TBATS+NN combination models, suggesting that weather effects are either already embedded in seasonal patterns or not effectively captured through the PCA based approach.
+While the neural network model with Fourier terms and temperature performed best based on RMSE, it did not translate to strong Kaggle performance. This suggests that incorporating weather variables does not necessarily improve forecasts compared to models that more effectively capture complex seasonal patterns, such as the TBATS+NN combinations.
 
 # 7. Git-Hub Link
 
